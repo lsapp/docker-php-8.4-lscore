@@ -1,0 +1,92 @@
+---
+- name: Build and Push Docker Image
+  hosts: localhost
+  connection: local
+  #  gather_facts: false # No facts needed for this playbook, speeds it up
+
+  # Define variables that can be overridden via --extra-vars (-e)
+  vars:
+    # Path to your Dockerfile relative to the playbook's execution directory
+    dockerfile_path: "./Dockerfile"
+    # Build a context path (usually the directory containing the Dockerfile)
+    build_context_path: "."
+
+    # REQUIRED: URL of your container registry (e.g., "registry.gitlab.com", "myaccount.azurecr.io", "https://index.docker.io/v1/" for Docker Hub)
+    registry_url: "{{ lookup('env', 'DOCKER_REGISTRY_URL') | default('') }}"
+    # REQUIRED: Name of your repository (e.g., "my-namespace/my-app", "my-repo")
+    repository_name: "{{ lookup('env', 'DOCKER_REGISTRY_NAME') | default('') }}"
+    # REQUIRED: Name of your repository (e.g., "my-namespace/my-app", "my-repo")
+    image_name: "{{ lookup('env', 'DOCKER_IMAGE_NAME') | default('') }}"
+    # Image tag (e.g., "latest", "v1.0.0", can be derived from CI_COMMIT_TAG)
+    image_tag: "{{ lookup('env', 'IMAGE_TAG') | default(ansible_date_time.iso8601_micro | regex_replace('[^0-9]','')) }}"
+
+    # REQUIRED: Username for registry authentication
+    username: "{{ lookup('env', 'DOCKER_REGISTRY_USERNAME') | default('') }}"
+    # REQUIRED: Registry token or password (sensitive, use environment variables or Ansible Vault)
+    password: "{{ lookup('env', 'DOCKER_REGISTRY_PASSWORD') | default('') }}"
+
+    # Full image name without tag for convenience
+    full_image_base_name: "{{ registry_url }}/{{ repository_name }}/{{ image_name }}"
+
+  tasks:
+    - name: Fail if required variables are not set
+      ansible.builtin.fail:
+        msg: "Missing required variable: {{ item }}. Please provide it via -e or environment variables."
+      when: item == ''
+      loop:
+        - "{{ registry_url }}"
+        - "{{ repository_name }}"
+        - "{{ image_name }}"
+        - "{{ username }}"
+        - "{{ password }}"
+    - name: Set dynamic image_tag based on environment variable or timestamp
+      ansible.builtin.set_fact:
+        # Check if IMAGE_TAG env var is set. If not, use the current timestamp.
+        image_tag: "{{ lookup('env', 'IMAGE_TAG') if lookup('env', 'IMAGE_TAG') else (ansible_date_time.iso8601_micro | regex_replace('[^0-9]','')) }}"
+
+    - name: Debug - Value of dynamic image_tag
+      ansible.builtin.debug:
+        msg: "Building and pushing with dynamic tag: '{{ image_tag }}'"
+
+    - name: Log in to Docker Registry
+      community.docker.docker_login:
+        registry_url: "{{ registry_url }}"
+        username: "{{ username }}"
+        password: "{{ password }}"
+      no_log: true
+
+    - name: Build and Push Docker Image
+      community.docker.docker_image:
+        build:
+          dockerfile: "{{ dockerfile_path }}"
+          path: "{{ playbook_dir }}"
+          pull: yes
+        name: "{{ full_image_base_name }}"
+        tag: "{{ image_tag }}"
+        push: yes
+        source: build
+        state: present
+      register: image_dynamic_tag_result
+
+    - name: Debug - Result of dynamic tag push
+      ansible.builtin.debug:
+        var: image_dynamic_tag_result.image.RepoTags
+
+    - name: Tag the newly built image with 'latest' locally using docker tag command
+      ansible.builtin.command:
+        cmd: "docker tag {{ full_image_base_name }}:{{ image_tag }} {{ full_image_base_name }}:latest"
+      changed_when: true
+
+    - name: Push the 'latest' tagged image to Registry
+      community.docker.docker_image:
+        name: "{{ full_image_base_name }}"
+        tag: "latest"
+        push: yes
+        source: local
+        state: present
+
+    - name: Display final pushed images
+      ansible.builtin.debug:
+        msg: |
+          Image pushed with dynamic tag: {{ full_image_base_name }}:{{ image_tag }}
+          Image also updated with 'latest' tag: {{ full_image_base_name }}:latest
