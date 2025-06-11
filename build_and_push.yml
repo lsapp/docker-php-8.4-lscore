@@ -17,6 +17,8 @@
     repository_name: "{{ lookup('env', 'DOCKER_REGISTRY_NAME') | default('') }}"
     # REQUIRED: Name of your repository (e.g., "my-namespace/my-app", "my-repo")
     image_name: "{{ lookup('env', 'DOCKER_IMAGE_NAME') | default('') }}"
+    # REQUIRED: Tag to be publishd (e.g., "latest")
+    publish_tag: "{{ lookup('env', 'PUBLISH_TAG') | default('') }}"
     # Image tag (e.g., "latest", "v1.0.0", can be derived from CI_COMMIT_TAG)
     image_tag: "{{ lookup('env', 'IMAGE_TAG') | default(ansible_date_time.iso8601_micro | regex_replace('[^0-9]','')) }}"
 
@@ -39,14 +41,17 @@
         - "{{ image_name }}"
         - "{{ username }}"
         - "{{ password }}"
+        - "{{ publish_tag }}"
     - name: Set dynamic image_tag based on environment variable or timestamp
       ansible.builtin.set_fact:
         # Check if IMAGE_TAG env var is set. If not, use the current timestamp.
         image_tag: "{{ lookup('env', 'IMAGE_TAG') if lookup('env', 'IMAGE_TAG') else (ansible_date_time.iso8601_micro | regex_replace('[^0-9]','')) }}"
 
-    - name: Debug - Value of dynamic image_tag
-      ansible.builtin.debug:
-        msg: "Building and pushing with dynamic tag: '{{ image_tag }}'"
+    - name: Save image tag to .tag file
+      ansible.builtin.copy:
+        content: "{{ image_tag }}"
+        dest: ".tag"
+        mode: '0644'
 
     - name: Log in to Docker Registry
       community.docker.docker_login:
@@ -55,7 +60,7 @@
         password: "{{ password }}"
       no_log: true
 
-    - name: Build and Push Docker Image
+    - name: Build new Docker image version with tag '{{ image_tag }}'
       community.docker.docker_image:
         build:
           dockerfile: "{{ dockerfile_path }}"
@@ -63,30 +68,25 @@
           pull: yes
         name: "{{ full_image_base_name }}"
         tag: "{{ image_tag }}"
-        push: yes
+        push: no
         source: build
         state: present
       register: image_dynamic_tag_result
 
-    - name: Debug - Result of dynamic tag push
-      ansible.builtin.debug:
-        var: image_dynamic_tag_result.image.RepoTags
-
-    - name: Tag the newly built image with 'latest' locally using docker tag command
+    - name: Tag the newly built image with '{{ publish_tag }}' locally using docker tag command
       ansible.builtin.command:
-        cmd: "docker tag {{ full_image_base_name }}:{{ image_tag }} {{ full_image_base_name }}:latest"
+        cmd: "docker tag {{ full_image_base_name }}:{{ image_tag }} {{ full_image_base_name }}:{{ publish_tag }}"
       changed_when: true
 
-    - name: Push the 'latest' tagged image to Registry
+    - name: Push the tagged image to Registry
       community.docker.docker_image:
         name: "{{ full_image_base_name }}"
-        tag: "latest"
+        tag: "{{ publish_tag }}"
         push: yes
         source: local
         state: present
 
-    - name: Display final pushed images
+    - name: Display final pushed image
       ansible.builtin.debug:
         msg: |
-          Image pushed with dynamic tag: {{ full_image_base_name }}:{{ image_tag }}
-          Image also updated with 'latest' tag: {{ full_image_base_name }}:latest
+          Image pushed with dynamic tag: {{ full_image_base_name }}:{{ publish_tag }}

@@ -1,7 +1,7 @@
 # https://hub.docker.com/_/php
 FROM php:8.4-fpm-alpine
 
-LABEL org.opencontainers.image.description="PHP 8.4 image with Composer, NPM and support for Postgres and Redis. Laravel PHP production ready image."
+LABEL org.opencontainers.image.description="PHP 8.4 image with Composer, NPM and support for Postgres and Redis. Laravel PHP production ready image to work with Deployer.org"
 LABEL org.opencontainers.image.source="https://github.com/lsapp/docker-php-8.4-lscore.git"
 
 # Set Current Directory
@@ -68,9 +68,12 @@ RUN npm config set cache /.npm --global
 # Install the 'shadow' package to provide usermod and groupmod
 RUN apk add --no-cache shadow
 
-# Copie e defina permissões para o entrypoint script
+# Copy an define permissions for entrypoint script
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
+
+# Copy tag
+COPY .tag /.tag
 
 # Defina o entrypoint para o container
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
